@@ -14,6 +14,7 @@ import (
 
 	"github.com/Masterminds/semver/v3"
 	"github.com/artifacthub/hub/internal/hub"
+	"github.com/artifacthub/hub/internal/pkg"
 	"github.com/artifacthub/hub/internal/repo"
 	"github.com/artifacthub/hub/internal/tracker"
 	"github.com/ghodss/yaml"
@@ -149,13 +150,26 @@ func (t *Tracker) Track(wg *sync.WaitGroup) error {
 				continue
 			}
 
+			// Read and parse Artifact Hub metadata file if available
+			var ahMD *hub.PackageMetadata
+			ahMDData, err := ioutil.ReadFile(filepath.Join(pkgVersionPath, hub.PackageMetadataFile))
+			switch {
+			case os.IsNotExist(err):
+			case err != nil:
+				t.warn(fmt.Errorf("error reading artifact hub metadata file %s: %w", pkgPath, err))
+			default:
+				if err := yaml.Unmarshal(ahMDData, &ahMD); err != nil {
+					t.warn(fmt.Errorf("error unmarshaling artifact hub metadata file: %w", err))
+				}
+			}
+
 			// Register package version
 			t.logger.Debug().Str("name", pkgName).Str("v", version).Msg("registering package")
 			var storeLogo bool
 			if i == 0 {
 				storeLogo = true
 			}
-			err = t.registerPackage(pkgName, manifest, csv, storeLogo)
+			err = t.registerPackage(pkgName, manifest, csv, storeLogo, ahMD)
 			if err != nil {
 				t.warn(fmt.Errorf("error registering package %s version %s: %w", pkgName, version, err))
 			}
@@ -259,7 +273,10 @@ func (t *Tracker) registerPackage(
 	manifest *manifests.PackageManifest,
 	csv *operatorsv1alpha1.ClusterServiceVersion,
 	storeLogo bool,
+	ahMD *hub.PackageMetadata,
 ) error {
+	version := getPackageVersion(csv)
+
 	// Store logo when available if requested
 	var logoImageID string
 	if storeLogo && len(csv.Spec.Icon) > 0 && csv.Spec.Icon[0].Data != "" {
@@ -282,7 +299,7 @@ func (t *Tracker) registerPackage(
 		Description:    csv.Annotations["description"],
 		Keywords:       csv.Spec.Keywords,
 		Readme:         csv.Spec.Description,
-		Version:        getPackageVersion(csv),
+		Version:        version,
 		IsOperator:     true,
 		DefaultChannel: manifest.DefaultChannelName,
 		ContainerImage: csv.Annotations["containerImage"],
@@ -357,6 +374,13 @@ func (t *Tracker) registerPackage(
 		"isGlobalOperator":                   isGlobalOperator,
 		"customResourcesDefinitions":         crds,
 		"customResourcesDefinitionsExamples": csv.Annotations["alm-examples"],
+	}
+
+	// Enrich package with info from Artifact Hub metadata file when available
+	if ahMD != nil {
+		if err := pkg.EnrichPackageFromMetadata(p, ahMD); err != nil {
+			t.warn(fmt.Errorf("error enriching package %s version %s: %w", name, version, err))
+		}
 	}
 
 	// Register package

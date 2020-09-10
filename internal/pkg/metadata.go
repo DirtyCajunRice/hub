@@ -14,6 +14,21 @@ var (
 	ErrInvalidMetadata = errors.New("invalid metadata")
 )
 
+// EnrichPackageFromMetadata enriches a package with information from the
+// metadata structure provided.
+func EnrichPackageFromMetadata(p *hub.Package, md *hub.PackageMetadata) error {
+	if md.Operator {
+		p.IsOperator = true
+	}
+	if md.Install != "" {
+		p.Install = md.Install
+	}
+	if md.Links != nil {
+		p.Links = append(p.Links, md.Links...)
+	}
+	return nil
+}
+
 // PreparePackageFromMetadata prepares a Package struct that will be used to
 // proceed with a package registration from the PackageMetadata provided by the
 // publisher.

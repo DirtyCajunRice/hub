@@ -86,38 +86,38 @@ func (t *Tracker) Track(wg *sync.WaitGroup) error {
 		default:
 		}
 
-		// Parse package metadata file and validate it
-		data, err := ioutil.ReadFile(pkgPath)
+		// Read and parse package Security Hub metadata file and validate it
+		shMDData, err := ioutil.ReadFile(pkgPath)
 		if err != nil {
-			t.warn(fmt.Errorf("error reading package metadata file %s: %w", pkgPath, err))
+			t.warn(fmt.Errorf("error reading security hub metadata file %s: %w", pkgPath, err))
 			return nil
 		}
-		var md *PackageMetadata
-		if err = yaml.Unmarshal(data, &md); err != nil || md == nil {
-			t.warn(fmt.Errorf("error unmarshaling package metadata file %s: %w", pkgPath, err))
+		var shMD *SecurityHubMetadata
+		if err = yaml.Unmarshal(shMDData, &shMD); err != nil || shMD == nil {
+			t.warn(fmt.Errorf("error unmarshaling package security hub metadata file %s: %w", pkgPath, err))
 			return nil
 		}
-		if _, err := semver.StrictNewVersion(md.Version); err != nil {
-			t.warn(fmt.Errorf("invalid package %s version (%s): %w", md.Name, md.Name, err))
+		if _, err := semver.StrictNewVersion(shMD.Version); err != nil {
+			t.warn(fmt.Errorf("invalid package %s version (%s): %w", shMD.Name, shMD.Name, err))
 			return nil
 		}
 
 		// Check if this package should be registered
-		if md.Kind != "FalcoRules" {
-			t.warn(fmt.Errorf("invalid package %s kind (%s)", md.Name, md.Kind))
+		if shMD.Kind != "FalcoRules" {
+			t.warn(fmt.Errorf("invalid package %s kind (%s)", shMD.Name, shMD.Kind))
 			return nil
 		}
-		key := fmt.Sprintf("%s@%s", md.Name, md.Version)
+		key := fmt.Sprintf("%s@%s", shMD.Name, shMD.Version)
 		packagesAvailable[key] = struct{}{}
 		if _, ok := packagesRegistered[key]; ok && !bypassDigestCheck {
 			return nil
 		}
 
 		// Register package
-		t.logger.Debug().Str("name", md.Name).Str("v", md.Version).Msg("registering package")
-		err = t.registerPackage(md, strings.TrimPrefix(pkgPath, basePath))
+		t.logger.Debug().Str("name", shMD.Name).Str("v", shMD.Version).Msg("registering package")
+		err = t.registerPackage(shMD, strings.TrimPrefix(pkgPath, basePath))
 		if err != nil {
-			t.warn(fmt.Errorf("error registering package %s version %s: %w", md.Name, md.Version, err))
+			t.warn(fmt.Errorf("error registering package %s version %s: %w", shMD.Name, shMD.Version, err))
 		}
 		return nil
 	})
@@ -154,18 +154,18 @@ func (t *Tracker) Track(wg *sync.WaitGroup) error {
 
 // registerPackage registers a package version using the package metadata
 // provided.
-func (t *Tracker) registerPackage(md *PackageMetadata, pkgPath string) error {
+func (t *Tracker) registerPackage(shMD *SecurityHubMetadata, pkgPath string) error {
 	// Register logo image if needed
 	var logoURL, logoImageID string
-	if md.Icon != "" {
-		logoURL = md.Icon
+	if shMD.Icon != "" {
+		logoURL = shMD.Icon
 		data, err := downloadImage(logoURL)
 		if err != nil {
-			return fmt.Errorf("error downloading package %s version %s image: %w", md.Name, md.Version, err)
+			return fmt.Errorf("error downloading package %s version %s image: %w", shMD.Name, shMD.Version, err)
 		}
 		logoImageID, err = t.svc.Is.SaveImage(t.svc.Ctx, data)
 		if err != nil && !errors.Is(err, image.ErrFormat) {
-			return fmt.Errorf("error saving package %s version %s image: %w", md.Name, md.Version, err)
+			return fmt.Errorf("error saving package %s version %s image: %w", shMD.Name, shMD.Version, err)
 		}
 	}
 
@@ -190,16 +190,16 @@ func (t *Tracker) registerPackage(md *PackageMetadata, pkgPath string) error {
 
 	// Build package and register it
 	p := &hub.Package{
-		Name:        md.Name,
+		Name:        shMD.Name,
 		LogoURL:     logoURL,
 		LogoImageID: logoImageID,
-		Description: md.ShortDescription,
-		Keywords:    md.Keywords,
-		Version:     md.Version,
-		Readme:      md.Description,
-		Provider:    md.Vendor,
+		Description: shMD.ShortDescription,
+		Keywords:    shMD.Keywords,
+		Version:     shMD.Version,
+		Readme:      shMD.Description,
+		Provider:    shMD.Vendor,
 		Data: map[string]interface{}{
-			"rules": md.Rules,
+			"rules": shMD.Rules,
 		},
 		Links: []*hub.Link{
 			{
@@ -229,8 +229,8 @@ func (t *Tracker) warn(err error) {
 	t.logger.Warn().Err(err).Send()
 }
 
-// PackageMetadata represents some metadata for a Falco rules package.
-type PackageMetadata struct {
+// SecurityHubMetadata represents some metadata for a Falco rules package.
+type SecurityHubMetadata struct {
 	Kind             string   `yaml:"kind"`
 	Name             string   `yaml:"name"`
 	ShortDescription string   `yaml:"shortDescription"`
@@ -242,7 +242,7 @@ type PackageMetadata struct {
 	Rules            []*Rule  `yaml:"rules"`
 }
 
-// Rule represents some Falco rules in yaml format, used by PackageMetadata.
+// Rule represents some Falco rules in yaml format, used by SecurityHubMetadata.
 type Rule struct {
 	Raw string `yaml:"raw"`
 }

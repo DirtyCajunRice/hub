@@ -194,6 +194,72 @@ func TestTracker(t *testing.T) {
 		tw.assertExpectations(t)
 	})
 
+	t.Run("error unmarshaling artifact hub metadata file", func(t *testing.T) {
+		// Setup tracker and expectations
+		tw := newTrackerWrapper(r)
+		tw.rc.On("CloneRepository", tw.ctx, r).Return(".", "testdata/path6", nil)
+		tw.rm.On("GetPackagesDigest", tw.ctx, r.RepositoryID).Return(nil, nil)
+		tw.rm.On("GetMetadata", mock.Anything).Return(&hub.RepositoryMetadata{}, nil)
+		tw.is.On("SaveImage", tw.ctx, imageData).Return("logoImageID", nil)
+		tw.pm.On("Register", tw.ctx, &hub.Package{
+			Name:           "test-operator",
+			DisplayName:    "Test Operator",
+			LogoImageID:    "logoImageID",
+			Description:    "This is just a test",
+			Keywords:       []string{"Test", "Application Runtime"},
+			Readme:         "Test Operator README",
+			Version:        "0.1.0",
+			IsOperator:     true,
+			ContainerImage: "repo.url:latest",
+			Provider:       "Test",
+			CreatedAt:      1561735380,
+			Repository:     r,
+			Channels: []*hub.Channel{
+				{
+					Name:    "alpha",
+					Version: "0.1.0",
+				},
+			},
+			DefaultChannel: "alpha",
+			Links: []*hub.Link{
+				{
+					Name: "Sample link",
+					URL:  "https://sample.link",
+				},
+				{
+					Name: "source",
+					URL:  "https://github.com/test/test-operator",
+				},
+			},
+			Maintainers: []*hub.Maintainer{
+				{
+					Name:  "Test",
+					Email: "test@email.com",
+				},
+			},
+			Data: map[string]interface{}{
+				"capabilities": "Basic Install",
+				"customResourcesDefinitions": []map[string]string{
+					{
+						"description": "Test CRD",
+						"displayName": "Test",
+						"kind":        "Test",
+						"name":        "crd.test.com",
+						"version":     "v1alpha1",
+					},
+				},
+				"customResourcesDefinitionsExamples": "",
+				"isGlobalOperator":                   true,
+			},
+		}).Return(nil)
+		tw.ec.On("Append", r.RepositoryID, mock.Anything).Return()
+
+		// Run tracker and check expectations
+		err := tw.t.Track(tw.wg)
+		assert.NoError(t, err)
+		tw.assertExpectations(t)
+	})
+
 	t.Run("error unregistering package version", func(t *testing.T) {
 		// Setup tracker and expectations
 		tw := newTrackerWrapper(r)

@@ -14,11 +14,13 @@ import (
 
 	"github.com/artifacthub/hub/internal/hub"
 	"github.com/artifacthub/hub/internal/license"
+	"github.com/artifacthub/hub/internal/pkg"
 	"github.com/artifacthub/hub/internal/tracker"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"github.com/vincent-petithory/dataurl"
 	"golang.org/x/time/rate"
+	"gopkg.in/yaml.v2"
 	"helm.sh/helm/v3/pkg/chart"
 	"helm.sh/helm/v3/pkg/chart/loader"
 )
@@ -109,35 +111,35 @@ func (w *Worker) handleRegisterJob(j *Job) {
 		w.warn(name, version, fmt.Errorf("error loading chart (%s): %w", chartURL, err))
 		return
 	}
-	md := chart.Metadata
+	hcMD := chart.Metadata
 
 	// Store logo when available if requested
 	var logoURL, logoImageID string
-	if j.StoreLogo && md.Icon != "" {
-		logoURL = md.Icon
-		data, err := w.getImage(md.Icon)
+	if j.StoreLogo && hcMD.Icon != "" {
+		logoURL = hcMD.Icon
+		data, err := w.getImage(hcMD.Icon)
 		if err != nil {
-			w.warn(name, version, fmt.Errorf("error getting image %s: %w", md.Icon, err))
+			w.warn(name, version, fmt.Errorf("error getting image %s: %w", hcMD.Icon, err))
 		} else {
 			logoImageID, err = w.svc.Is.SaveImage(w.svc.Ctx, data)
 			if err != nil && !errors.Is(err, image.ErrFormat) {
-				w.warn(name, version, fmt.Errorf("error saving image %s: %w", md.Icon, err))
+				w.warn(name, version, fmt.Errorf("error saving image %s: %w", hcMD.Icon, err))
 			}
 		}
 	}
 
 	// Prepare package to be registered
 	p := &hub.Package{
-		Name:        md.Name,
+		Name:        hcMD.Name,
 		LogoURL:     logoURL,
 		LogoImageID: logoImageID,
-		Description: md.Description,
-		Keywords:    md.Keywords,
-		HomeURL:     md.Home,
-		Version:     md.Version,
-		AppVersion:  md.AppVersion,
+		Description: hcMD.Description,
+		Keywords:    hcMD.Keywords,
+		HomeURL:     hcMD.Home,
+		Version:     hcMD.Version,
+		AppVersion:  hcMD.AppVersion,
 		Digest:      j.ChartVersion.Digest,
-		Deprecated:  md.Deprecated,
+		Deprecated:  hcMD.Deprecated,
 		ContentURL:  chartURL,
 		CreatedAt:   j.ChartVersion.Created.Unix(),
 		Repository:  w.r,
@@ -157,7 +159,7 @@ func (w *Worker) handleRegisterJob(j *Job) {
 		w.warn(name, version, fmt.Errorf("error checking provenance file: %w", err))
 	}
 	var maintainers []*hub.Maintainer
-	for _, entry := range md.Maintainers {
+	for _, entry := range hcMD.Maintainers {
 		if entry.Email != "" {
 			maintainers = append(maintainers, &hub.Maintainer{
 				Name:  entry.Name,
@@ -165,8 +167,8 @@ func (w *Worker) handleRegisterJob(j *Job) {
 			})
 		}
 	}
-	links := make([]*hub.Link, 0, len(md.Sources))
-	for _, sourceURL := range md.Sources {
+	links := make([]*hub.Link, 0, len(hcMD.Sources))
+	for _, sourceURL := range hcMD.Sources {
 		links = append(links, &hub.Link{
 			Name: "source",
 			URL:  sourceURL,
@@ -178,11 +180,11 @@ func (w *Worker) handleRegisterJob(j *Job) {
 	if len(maintainers) > 0 {
 		p.Maintainers = maintainers
 	}
-	if strings.Contains(strings.ToLower(md.Name), "operator") {
+	if strings.Contains(strings.ToLower(hcMD.Name), "operator") {
 		p.IsOperator = true
 	}
-	dependencies := make([]map[string]string, 0, len(md.Dependencies))
-	for _, dependency := range md.Dependencies {
+	dependencies := make([]map[string]string, 0, len(hcMD.Dependencies))
+	for _, dependency := range hcMD.Dependencies {
 		dependencies = append(dependencies, map[string]string{
 			"name":       dependency.Name,
 			"version":    dependency.Version,
@@ -195,8 +197,21 @@ func (w *Worker) handleRegisterJob(j *Job) {
 		}
 	}
 
+	// Enrich package with info from Artifact Hub metadata file when available
+	ahMDFile := getFile(chart, hub.PackageMetadataFile)
+	if ahMDFile != nil {
+		var ahMD *hub.PackageMetadata
+		if err := yaml.Unmarshal(ahMDFile.Data, &ahMD); err != nil {
+			w.warn(name, version, fmt.Errorf("error unmarshaling artifact hub metadata file: %w", err))
+		} else if ahMD != nil {
+			if err := pkg.EnrichPackageFromMetadata(p, ahMD); err != nil {
+				w.warn(name, version, fmt.Errorf("error enriching package: %w", err))
+			}
+		}
+	}
+
 	// Register package
-	w.logger.Debug().Str("name", md.Name).Str("v", md.Version).Msg("registering package")
+	w.logger.Debug().Str("name", hcMD.Name).Str("v", hcMD.Version).Msg("registering package")
 	if err := w.svc.Pm.Register(w.svc.Ctx, p); err != nil {
 		w.warn(name, version, fmt.Errorf("error registering package: %w", err))
 	}

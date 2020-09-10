@@ -42,6 +42,15 @@ func TestWorker(t *testing.T) {
 				"http://tests/pkg2-1.0.0.tgz",
 			},
 		}
+		pkg3V1 := &repo.ChartVersion{
+			Metadata: &chart.Metadata{
+				Name:    "pkg3",
+				Version: "1.0.0",
+			},
+			URLs: []string{
+				"http://tests/pkg3-1.0.0.tgz",
+			},
+		}
 		job := &Job{
 			Kind:         Register,
 			ChartVersion: pkg1V1,
@@ -147,6 +156,37 @@ func TestWorker(t *testing.T) {
 			}, nil)
 			ww.is.On("SaveImage", mock.Anything, []byte("imageData")).Return("", errFake)
 			ww.pm.On("Register", mock.Anything, mock.Anything).Return(nil)
+
+			// Run worker and check expectations
+			ww.w.Run(ww.wg, ww.queue)
+			ww.assertExpectations(t)
+		})
+
+		t.Run("error unmarshaling artifact hub metadata file", func(t *testing.T) {
+			// Setup worker and expectations
+			ww := newWorkerWrapper(context.Background())
+			job := &Job{
+				Kind:         Register,
+				ChartVersion: pkg3V1,
+				StoreLogo:    true,
+			}
+			ww.queue <- job
+			close(ww.queue)
+			f, _ := os.Open("testdata/" + path.Base(job.ChartVersion.URLs[0]))
+			ww.hg.On("Get", job.ChartVersion.URLs[0]).Return(&http.Response{
+				Body:       f,
+				StatusCode: http.StatusOK,
+			}, nil)
+			ww.hg.On("Get", logoImageURL).Return(&http.Response{
+				Body:       ioutil.NopCloser(strings.NewReader("imageData")),
+				StatusCode: http.StatusOK,
+			}, nil)
+			ww.ec.On("Append", ww.w.r.RepositoryID, mock.Anything).Return()
+			ww.hg.On("Get", job.ChartVersion.URLs[0]+".prov").Return(&http.Response{
+				Body:       ioutil.NopCloser(strings.NewReader("")),
+				StatusCode: http.StatusNotFound,
+			}, nil)
+			ww.is.On("SaveImage", mock.Anything, []byte("imageData")).Return("imageID", nil)
 
 			// Run worker and check expectations
 			ww.w.Run(ww.wg, ww.queue)
