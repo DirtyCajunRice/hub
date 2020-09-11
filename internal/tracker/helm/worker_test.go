@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"path"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -15,6 +16,7 @@ import (
 	"github.com/artifacthub/hub/internal/pkg"
 	"github.com/artifacthub/hub/internal/tests"
 	"github.com/artifacthub/hub/internal/tracker"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"helm.sh/helm/v3/pkg/chart"
 	"helm.sh/helm/v3/pkg/repo"
@@ -199,7 +201,36 @@ func TestWorker(t *testing.T) {
 				StatusCode: http.StatusNotFound,
 			}, nil)
 			ww.is.On("SaveImage", mock.Anything, []byte("imageData")).Return("imageID", nil)
-			ww.pm.On("Register", mock.Anything, mock.Anything).Return(nil)
+			ww.pm.On("Register", mock.Anything, &hub.Package{
+				Name:        "pkg1",
+				LogoURL:     "http://icon.url",
+				LogoImageID: "imageID",
+				IsOperator:  true,
+				Description: "Package1 chart",
+				Links: []*hub.Link{
+					{
+						Name: "link1",
+						URL:  "https://link1.url",
+					},
+					{
+						Name: "link2",
+						URL:  "https://link2.url",
+					},
+				},
+				Version:    "1.0.0",
+				AppVersion: "1.0.0",
+				ContentURL: "http://tests/pkg1-1.0.0.tgz",
+				Maintainers: []*hub.Maintainer{
+					{
+						Name:  "me",
+						Email: "me@me.com",
+					},
+				},
+				Repository: &hub.Repository{
+					RepositoryID: "repo1",
+				},
+				CreatedAt: -62135596800,
+			}).Return(nil)
 
 			// Run worker and check expectations
 			ww.w.Run(ww.wg, ww.queue)
@@ -271,6 +302,148 @@ func TestWorker(t *testing.T) {
 			ww.assertExpectations(t)
 		})
 	})
+}
+
+func TestEnrichPackageFromAnnotations(t *testing.T) {
+	testCases := []struct {
+		p                *hub.Package
+		annotations      map[string]string
+		expectedOperator bool
+		expectedLinks    []*hub.Link
+		expectedErrMsg   string
+	}{
+		// Operator flag
+		{
+			&hub.Package{},
+			map[string]string{
+				operatorAnnotation: "invalid",
+			},
+			false,
+			nil,
+			"invalid operator value",
+		},
+		{
+			&hub.Package{},
+			map[string]string{
+				operatorAnnotation: "true",
+			},
+			true,
+			nil,
+			"",
+		},
+		{
+			&hub.Package{
+				IsOperator: true,
+			},
+			map[string]string{
+				operatorAnnotation: "false",
+			},
+			false,
+			nil,
+			"",
+		},
+		{
+			&hub.Package{
+				IsOperator: true,
+			},
+			map[string]string{},
+			true,
+			nil,
+			"",
+		},
+		// Links
+		{
+			&hub.Package{},
+			map[string]string{
+				linksAnnotation: `"{\"`,
+			},
+			false,
+			nil,
+			"invalid links value",
+		},
+		{
+			&hub.Package{
+				Links: []*hub.Link{
+					{
+						Name: "",
+						URL:  "https://link1.url",
+					},
+				},
+			},
+			map[string]string{
+				linksAnnotation: `"{\"`,
+			},
+			false,
+			[]*hub.Link{
+				{
+					Name: "",
+					URL:  "https://link1.url",
+				},
+			},
+			"invalid links value",
+		},
+		{
+			&hub.Package{},
+			map[string]string{
+				linksAnnotation: `
+- name: link1
+  url: https://link1.url
+`,
+			},
+			false,
+			[]*hub.Link{
+				{
+					Name: "link1",
+					URL:  "https://link1.url",
+				},
+			},
+			"",
+		},
+		{
+			&hub.Package{
+				Links: []*hub.Link{
+					{
+						Name: "",
+						URL:  "https://link1.url",
+					},
+				},
+			},
+			map[string]string{
+				linksAnnotation: `
+- name: link1
+  url: https://link1.url
+- name: link2
+  url: https://link2.url
+`,
+			},
+			false,
+			[]*hub.Link{
+				{
+					Name: "link1",
+					URL:  "https://link1.url",
+				},
+				{
+					Name: "link2",
+					URL:  "https://link2.url",
+				},
+			},
+			"",
+		},
+	}
+	for i, tc := range testCases {
+		tc := tc
+		t.Run(strconv.Itoa(i), func(t *testing.T) {
+			err := enrichPackageFromAnnotations(tc.p, tc.annotations)
+			if tc.expectedErrMsg != "" {
+				assert.Error(t, err)
+				assert.Contains(t, err.Error(), tc.expectedErrMsg)
+			} else {
+				assert.Nil(t, err)
+			}
+			assert.Equal(t, tc.expectedOperator, tc.p.IsOperator)
+			assert.Equal(t, tc.expectedLinks, tc.p.Links)
+		})
+	}
 }
 
 type workerWrapper struct {
